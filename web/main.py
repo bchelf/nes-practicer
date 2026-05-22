@@ -118,13 +118,25 @@ class BitmapFont:
 class SuccessSound:
     def __init__(self) -> None:
         self.sound = None
+        self._raw = None
+        self._tried = False
+
+    def _ensure(self) -> None:
+        if self._tried:
+            return
+        self._tried = True
         try:
-            buf = self._build_wav_buffer()
-            self.sound = pygame.mixer.Sound(buffer=buf)
+            pygame.mixer.init(SAMPLE_RATE, -16, 1, 512)
+        except Exception:
+            return
+        try:
+            self._raw = self._build_wav_buffer()
+            self.sound = pygame.mixer.Sound(buffer=self._raw)
         except Exception:
             self.sound = None
 
     def play(self) -> None:
+        self._ensure()
         if self.sound is not None:
             try:
                 self.sound.play()
@@ -245,15 +257,10 @@ def summarize(history):
 
 
 async def main() -> None:
-    pygame.mixer.pre_init(SAMPLE_RATE, -16, 1, 512)
-    pygame.init()
-    try:
-        pygame.mixer.init(SAMPLE_RATE, -16, 1, 512)
-    except Exception:
-        pass
+    pygame.display.init()
+    pygame.font.init()
     pygame.display.set_caption("NES Timing Practice")
     screen = pygame.display.set_mode(WINDOW_SIZE)
-    clock = pygame.time.Clock()
     success_sound = SuccessSound()
     firework = Firework()
 
@@ -433,8 +440,7 @@ async def main() -> None:
         firework.draw(screen, perf_counter())
 
         pygame.display.flip()
-        clock.tick(FPS)
-        await asyncio.sleep(0)
+        await asyncio.sleep(1.0 / FPS)
 
     pygame.quit()
 
