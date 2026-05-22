@@ -11,6 +11,12 @@ Run:
 
 from __future__ import annotations
 
+import math
+import shutil
+import subprocess
+import tempfile
+import wave
+from array import array
 from collections import deque
 from dataclasses import dataclass
 from time import perf_counter
@@ -23,6 +29,8 @@ INPUT_POLL_HZ = 1000
 FRAME_SECONDS = 1.0 / FPS
 WINDOW_SIZE = (900, 620)
 MAX_HISTORY = 10
+SAMPLE_RATE = 44_100
+AFPLAY_VISUAL_SYNC_DELAY = 0.08
 
 BUTTONS = {
     pygame.K_w: "Up",
@@ -121,6 +129,114 @@ class BitmapFont:
         return surface
 
 
+class SuccessSound:
+    def __init__(self) -> None:
+        self.player = shutil.which("afplay")
+        self.path = self._build_wav() if self.player is not None else None
+
+    def play(self) -> None:
+        if self.player is None or self.path is None:
+            return
+        subprocess.Popen(
+            [self.player, self.path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    @property
+    def visual_sync_delay(self) -> float:
+        return AFPLAY_VISUAL_SYNC_DELAY if self.player is not None else 0.0
+
+    @staticmethod
+    def _build_wav() -> str:
+        notes = (523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98)
+        note_seconds = 0.075
+        gap_seconds = 0.006
+        samples = array("h")
+
+        for frequency in notes:
+            note_count = int(SAMPLE_RATE * note_seconds)
+            gap_count = int(SAMPLE_RATE * gap_seconds)
+            for index in range(note_count):
+                t = index / SAMPLE_RATE
+                fade_in = min(1.0, index / (SAMPLE_RATE * 0.006))
+                fade_out = min(1.0, (note_count - index) / (SAMPLE_RATE * 0.018))
+                envelope = min(fade_in, fade_out)
+                value = math.sin(2.0 * math.pi * frequency * t)
+                samples.append(int(value * envelope * 13_000))
+            samples.extend([0] * gap_count)
+
+        path = f"{tempfile.gettempdir()}/nes_timing_success.wav"
+        with wave.open(path, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(SAMPLE_RATE)
+            wav.writeframes(samples.tobytes())
+        return path
+
+
+class Firework:
+    def __init__(self) -> None:
+        self.started_at = -10.0
+        self.duration = 0.75
+        self.center = (WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2)
+        self.angles = [math.tau * index / 16 for index in range(16)]
+
+    def trigger(self, now: float) -> None:
+        self.started_at = now
+
+    def reset(self) -> None:
+        self.started_at = -10.0
+
+    def draw(self, surface: pygame.Surface, now: float) -> None:
+        elapsed = now - self.started_at
+        if elapsed < 0 or elapsed > self.duration:
+            return
+
+        progress = elapsed / self.duration
+        radius = 18 + self._ease_out(progress) * 520
+        star_size = max(5, int(16 - progress * 8))
+        alpha = max(0, min(255, int((1.0 - progress) * 255)))
+        colors = (
+            (120, 255, 172, alpha),
+            (255, 233, 130, alpha),
+            (132, 210, 255, alpha),
+        )
+        layer = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
+
+        cx, cy = self.center
+        for index, angle in enumerate(self.angles):
+            x = cx + math.cos(angle) * radius
+            y = cy + math.sin(angle) * radius
+            self._draw_star(layer, (x, y), star_size, colors[index % len(colors)])
+
+        surface.blit(layer, (0, 0))
+
+    @staticmethod
+    def _ease_out(value: float) -> float:
+        return 1.0 - (1.0 - value) ** 3
+
+    @staticmethod
+    def _draw_star(
+        surface: pygame.Surface,
+        center: tuple[float, float],
+        radius: int,
+        color: tuple[int, int, int, int],
+    ) -> None:
+        cx, cy = center
+        points: list[tuple[float, float]] = []
+        for index in range(10):
+            angle = -math.pi / 2 + index * math.pi / 5
+            point_radius = radius if index % 2 == 0 else radius * 0.42
+            points.append(
+                (
+                    cx + math.cos(angle) * point_radius,
+                    cy + math.sin(angle) * point_radius,
+                )
+            )
+        pygame.draw.polygon(surface, color, points)
+
+
 @dataclass(frozen=True)
 class Attempt:
     start_button: str
@@ -171,6 +287,8 @@ def main() -> None:
     pygame.display.set_caption("NES Timing Practice")
     screen = pygame.display.set_mode(WINDOW_SIZE)
     clock = pygame.time.Clock()
+    success_sound = SuccessSound()
+    firework = Firework()
 
     title_font = BitmapFont(4, bold=True)
     big_font = BitmapFont(7, bold=True)
@@ -217,6 +335,7 @@ def main() -> None:
                 last_attempt = None
                 current_streak = 0
                 best_streak = 0
+                firework.reset()
                 history.clear()
                 message = "Reset. Press a mapped key to start."
                 continue
@@ -233,6 +352,7 @@ def main() -> None:
                     last_attempt = None
                     current_streak = 0
                     best_streak = 0
+                    firework.reset()
                     goal_active = False
                     message = f"Goal set to {goal_frames} frame(s). History cleared."
                 elif event.key == pygame.K_BACKSPACE:
@@ -273,6 +393,8 @@ def main() -> None:
                 delta = frames - goal_frames
                 if delta == 0:
                     message = "On target."
+                    success_sound.play()
+                    firework.trigger(now + success_sound.visual_sync_delay)
                 elif delta < 0:
                     message = f"Early by {-delta} frame(s)."
                 else:
@@ -371,6 +493,7 @@ def main() -> None:
             (120, 202, 168),
         )
         draw_text(screen, small_font, message, (34, 596), (255, 209, 102))
+        firework.draw(screen, perf_counter())
 
         pygame.display.flip()
         clock.tick(INPUT_POLL_HZ)
