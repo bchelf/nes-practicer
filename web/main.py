@@ -6,9 +6,7 @@ Adapted from timing_practice.py to run under pygbag (Pyodide + pygame).
 from __future__ import annotations
 
 import asyncio
-import io
 import math
-import wave
 from array import array
 from collections import deque
 from dataclasses import dataclass
@@ -258,9 +256,13 @@ def summarize(history):
 
 async def main() -> None:
     pygame.display.init()
-    pygame.font.init()
     pygame.display.set_caption("NES Timing Practice")
     screen = pygame.display.set_mode(WINDOW_SIZE)
+    # Paint immediately so the canvas isn't a blank gray rectangle while
+    # the rest of main initializes.
+    screen.fill((18, 21, 27))
+    pygame.display.flip()
+    await asyncio.sleep(0)
     success_sound = SuccessSound()
     firework = Firework()
 
