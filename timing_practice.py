@@ -2,6 +2,8 @@
 """
 NES-style keyboard timing trainer.
 
+WIP
+
 Requires pygame:
     python3 -m pip install pygame
 
